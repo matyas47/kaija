@@ -23,6 +23,7 @@ KaijaView {
 	var indexNb, indexSl;
 	var tiltNb, tiltSl;
 	var scaleNameTxt;
+	var masterSl, masterNb;
 
 	// Per-partial strip widget arrays
 	var freqNb, freqPitchTxt;
@@ -112,6 +113,12 @@ KaijaView {
 			}.defer;
 		});
 
+		ctrl.addListener(\master, { |v|
+			{ if(masterSl.notNil) { masterSl.value = v.linlin(0, 1, 0, 1) };
+			  if(masterNb.notNil) { masterNb.value = v.round(0.001) };
+			}.defer;
+		});
+
 		ctrl.addListener(\scale, { |name|
 			{ if(scaleNameTxt.notNil) { scaleNameTxt.string = name } }.defer;
 		});
@@ -133,6 +140,7 @@ KaijaView {
 		indexNb = nil; indexSl = nil;
 		tiltNb  = nil; tiltSl  = nil;
 		scaleNameTxt = nil;
+		masterSl = nil; masterNb = nil;
 		voiceLights  = Array.newClear(ctrl.voices.size);
 		// 9 strips: 8 partials + 1 noise
 		freqNb       = Array.newClear(ctrl.voices[0].num);
@@ -259,15 +267,13 @@ KaijaView {
 			);
 		});
 
-		// Row 3: vcf | Q | drv | vMix | vPos | vRQ
-		seg6 = (uiW / 6).floor.asInteger;
+		// Row 3: vcf | Q | drv | vPos  (vMix hardcoded 1.0, vRQ hardcoded 1.0)
+		seg6 = (uiW / 4).floor.asInteger;
 		[
-			["vcf",  2000, { |v| v.explin(20,20000,0,1) }, { |v| v.linexp(0,1,20,20000) }, \vcfFreq,  panCol],
-			["Q",    0.35, { |v| v.linlin(0.05,0.95,0,1) }, { |v| v.linlin(0,1,0.05,0.95) }, \vcfRQ, panCol],
-			["drv",  1.0,  { |v| v.explin(0.25,8,0,1) }, { |v| v.linexp(0,1,0.25,8) },     \drive,    panCol],
-			["vMix", 0.0,  { |v| v },                     { |v| v },                         \vowelMix, amCol],
-			["vPos", 0.375,{ |v| v },                     { |v| v },                         \vowelPos4, amCol],
-			["vRQ",  0.2,  { |v| v },                     { |v| v },                         \vowelRQ3,  amCol]
+			["vcf",  2000,  { |v| v.explin(20,20000,0,1) },  { |v| v.linexp(0,1,20,20000) },  \vcfFreq,  panCol],
+			["Q",    0.35,  { |v| v.linlin(0.05,0.95,0,1) }, { |v| v.linlin(0,1,0.05,0.95) }, \vcfRQ,    panCol],
+			["drv",  1.0,   { |v| v.explin(0.25,8,0,1) },   { |v| v.linexp(0,1,0.25,8) },    \drive,    panCol],
+			["vPos", 0.375, { |v| v },                       { |v| v },                        \vowelPos4, amCol]
 		].do({ |spec, i|
 			var capturedKey;
 			x           = seg6 * i;
@@ -284,9 +290,9 @@ KaijaView {
 				toSlider: spec[2],
 				fromSlider: spec[3],
 				action: { |v|
-					if(capturedKey == \vowelPos4)  { ctrl.set(\vowelPos, v * 4) }
-					{ if(capturedKey == \vowelRQ3) { ctrl.set(\vowelRQ, v.linlin(0,1,0.5,3.0)) }
-					                               { ctrl.set(capturedKey, v) } };
+					if(capturedKey == \vowelPos4)
+						{ ctrl.set(\vowelPos, v * 4) }
+						{ ctrl.set(capturedKey, v) };
 				}
 			);
 		});
@@ -394,6 +400,22 @@ KaijaView {
 			.states_([["Clear scale"]])
 			.font_(Font("Liberation Sans", 7))
 			.action_({ ctrl.clearScale });
+
+		// Master level — right of scale controls
+		StaticText(voiceRow, Rect(scaleX + 198, 5, 36, 14))
+			.string_("master").stringColor_(txtCol).font_(uiFont);
+		masterSl = Slider(voiceRow, Rect(scaleX + 236, 6, 120, 12))
+			.value_(0.5)
+			.background_(lvlCol)
+			.action_({ |s| ctrl.set(\master, s.value) });
+		masterNb = NumberBox(voiceRow, Rect(scaleX + 360, 3, 44, 18))
+			.decimals_(2).step_(0.01).font_(uiFont)
+			.value_(0.5)
+			.action_({ |n|
+				var v = n.value.clip(0, 1);
+				masterSl.value = v;
+				ctrl.set(\master, v);
+			});
 	}
 
 	// ------------------------------------------------------------------

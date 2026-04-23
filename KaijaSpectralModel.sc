@@ -39,11 +39,10 @@ KaijaSpectralModel : KassiaSpectralModel {
 		mx      = rawAmps.maxItem.max(1e-12);
 		rawAmps = rawAmps / mx;
 
-		// RMS normalise — scale so RMS of the partial array equals a
-		// fixed target (0.5), keeping perceived loudness consistent
-		// across different ratio/index/tilt combinations.
+		// RMS normalise — scale so RMS of the partial array equals 1.0,
+		// keeping perceived loudness consistent across parameter changes.
 		rms = ((rawAmps.collect({ |a| a * a }).sum / numPartials) ** 0.5).max(1e-12);
-		rawAmps = (rawAmps * (0.5 / rms)).clip(0, 1);
+		rawAmps = (rawAmps * (1.0 / rms)).clip(0, 1);
 
 		// Store frequencies as ratios relative to carrier
 		freqs = rawFreqs.collect({ |f| (f / carrier).asFloat });

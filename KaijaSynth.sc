@@ -48,14 +48,14 @@ KaijaSynth : KassiaSynth {
 		n = num.asInteger.max(1);
 
 		SynthDef(defName, { |out=0, gate=1,
-			root=55, master=0.15, velocity=1.0,
-			pitchBend=0.0,        // pitch bend in semitones (+/-)
+			root=55, master=0.5, velocity=1.0,
+			pitchBend=0.0,
 			vcfFreq=2000, vcfRQ=0.35,
-			vcfEnvAmt=0.5,        // how much the ADSR opens the filter (0–1)
-			vcfLFORate=0.5, vcfLFODepth=0.0,  // VCF LFO
+			vcfEnvAmt=0.5,
+			vcfLFORate=0.5, vcfLFODepth=0.0,
 			partLPF=6000, partLPFRQ=0.5,
-			vowelMix=0.0, vowelPos=1.5, vowelRQ=1.0,
-			noiseAmp=0.0,         // pink noise mix level (0–1)
+			vowelPos=1.5,
+			noiseAmp=0.0,
 			// ADSR
 			attack=0.01, decay=0.3, sustain=0.7, release=0.5,
 			// smoothing lag times
@@ -67,7 +67,7 @@ KaijaSynth : KassiaSynth {
 
 			var ratios, levels, phase, amRate, amDepth;
 			var env, vcfLFO, vcfCut, baseF, f, ph, osc, am, per, sig, noise;
-			var vmix, vpos, vrq, mstr, vcfFreqSm, vcfRQSm, driveSm;
+			var vpos, mstr, vcfFreqSm, vcfRQSm, driveSm;
 			var levelsSm, amRateSm, amDepthSm, bendRatio, noiseAmpSm;
 
 			ratios  = NamedControl.kr(\ratios,  (1..n));
@@ -120,16 +120,15 @@ KaijaSynth : KassiaSynth {
 
 			sig = (sig * driveSm).tanh * drivePost;
 
-			vmix = Lag.kr(vowelMix.clip(0, 1),    0.1);
-			vpos = Lag.kr(vowelPos.clip(0, 4),     0.1);
-			vrq  = Lag.kr(vowelRQ.clip(0.5, 3.0),  0.1);
+			vpos = Lag.kr(vowelPos.clip(0, 4), 0.1);
 
+			// vowelMix hardcoded to 1.0, vowelRQ hardcoded to 1.0
 			sig = FormantVowel.process(
 				sig,
 				rootHz:   root,
-				mix:      vmix,
+				mix:      1.0,
 				pos:      vpos,
-				rq:       vrq,
+				rq:       1.0,
 				scaleRef: 110
 			);
 
@@ -138,7 +137,7 @@ KaijaSynth : KassiaSynth {
 
 			// Amplitude envelope × velocity × master
 			sig = sig * env * velocity * mstr;
-			sig = Limiter.ar(sig, 0.95, 0.01);
+			sig = Limiter.ar(sig, 0.99, 0.01);
 
 			// Output as stereo (centred)
 			Out.ar(out, sig ! 2);

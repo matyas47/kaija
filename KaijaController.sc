@@ -54,7 +54,7 @@ KaijaController {
 		sustainedNotes = Set.new;
 		voiceIndex     = 0;
 		synthParams    = (
-			master:       0.15,
+			master:       0.5,
 			vcfFreq:      2000,
 			vcfRQ:        0.35,
 			vcfEnvAmt:    0.5,
@@ -66,9 +66,7 @@ KaijaController {
 			sustain:      0.7,
 			release:      0.5,
 			drive:        1.0,
-			vowelMix:     0.0,
-			vowelPos:     1.5,
-			vowelRQ:      1.0
+			vowelPos:     1.5
 		);
 		^this
 	}
