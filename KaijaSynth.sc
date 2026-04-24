@@ -25,7 +25,7 @@ KaijaSynth : KassiaSynth {
 
 	classvar <>defName = \kaija_core;
 
-	// Override init — reduced state (no pans, fmRate, fmDepthCents)
+	// Override init — reduced state (no pans, fmRate, fmDepthCents, amRate, amDepth)
 	init { |n, pg|
 		num         = n.asInteger.max(1);
 		partialGain = pg.asFloat;
@@ -33,8 +33,8 @@ KaijaSynth : KassiaSynth {
 			ratios:  (1..num).collect(_.asFloat),
 			levels:  Array.fill(num, 0.0),
 			phase:   Array.fill(num, 0.0),
-			amRate:  Array.fill(num, 0.05),
-			amDepth: Array.fill(num, 0.0)
+			partAtk: Array.fill(num, 0.0),
+			partRel: Array.fill(num, 0.0)
 		);
 		^this
 	}
@@ -60,46 +60,58 @@ KaijaSynth : KassiaSynth {
 			attack=0.01, decay=0.3, sustain=0.7, release=0.5,
 			// smoothing lag times
 			masterLag=0.05, vcfLag=0.3, vcfRQLag=0.3,
-			driveLag=0.1, partLevelLag=0.1, amRateLag=0.5, amDepthLag=0.5,
+			driveLag=0.1, partLevelLag=0.1,
 			ratioLag=0.3, noiseLag=0.1,
 			drive=1.0, drivePost=1.0
 			|
 
-			var ratios, levels, phase, amRate, amDepth;
-			var env, vcfLFO, vcfCut, baseF, f, ph, osc, am, per, sig, noise;
+			var ratios, levels, phase, partAtk, partRel;
+			var env, partEnvs, vcfLFO, vcfCut, baseF, f, ph, osc, per, sig, noise;
 			var vpos, mstr, vcfFreqSm, vcfRQSm, driveSm;
-			var levelsSm, amRateSm, amDepthSm, bendRatio, noiseAmpSm;
+			var levelsSm, noiseAmpSm, bendRatio;
 
 			ratios  = NamedControl.kr(\ratios,  (1..n));
 			levels  = NamedControl.kr(\levels,  Array.fill(n, 0.0));
 			phase   = NamedControl.kr(\phase,   Array.fill(n, 0.0));
-			amRate  = NamedControl.kr(\amRate,  Array.fill(n, 0.05));
-			amDepth = NamedControl.kr(\amDepth, Array.fill(n, 0.0));
+			partAtk = NamedControl.kr(\partAtk, Array.fill(n, 0.0));
+			partRel = NamedControl.kr(\partRel, Array.fill(n, 0.0));
 
-			// ADSR envelope — controls both amplitude and filter
+			// Main ADSR — overall amplitude and filter shape
 			env = EnvGen.kr(
 				Env.adsr(attack, decay, sustain, release),
 				gate,
 				doneAction: 2
 			);
 
+			// Per-partial ASR envelopes — shape timbre independently of main ADSR
+			// sustain is 1.0; level slider controls steady-state amplitude
+			partEnvs = Array.fill(n, { |i|
+				EnvGen.kr(
+					Env.asr(
+						partAtk[i].max(0.0001),
+						1.0,
+						partRel[i].max(0.0001)
+					),
+					gate
+				)
+			});
+
 			mstr       = Lag.kr(master,                   masterLag.max(0.001));
 			vcfFreqSm  = Lag.kr(vcfFreq.clip(20, 20000),  vcfLag.max(0.001));
 			vcfRQSm    = Lag.kr(vcfRQ.clip(0.05, 0.95),   vcfRQLag.max(0.001));
 			driveSm    = Lag.kr(drive.clip(0.25, 8.0),    driveLag.max(0.001));
 			levelsSm   = Lag.kr(levels,                    partLevelLag.max(0.001));
-			amRateSm   = Lag.kr(amRate.clip(0.0001, 2.0), amRateLag.max(0.001));
-			amDepthSm  = Lag.kr(amDepth.clip(0.0, 1.0),   amDepthLag.max(0.001));
 			noiseAmpSm = Lag.kr(noiseAmp.clip(0.0, 1.0),  noiseLag.max(0.001));
 
 			// Pitch bend: semitones -> ratio
 			bendRatio = pitchBend.midiratio;
 
 			// VCF LFO + ADSR envelope modulation
+			// env squared gives gentler filter opening at note onset
 			vcfLFO = SinOsc.kr(vcfLFORate.max(0.0001)).range(
 				1 - vcfLFODepth, 1 + vcfLFODepth
 			);
-			vcfCut = (vcfFreqSm * vcfLFO * (1 + (env * vcfEnvAmt * 3))).clip(20, 20000);
+			vcfCut = (vcfFreqSm * vcfLFO * (1 + ((env ** 2) * vcfEnvAmt * 2))).clip(20, 20000);
 
 			// Partial frequencies — pitch bend and ratio smoothing applied
 			baseF = (root * bendRatio * Lag.kr(ratios, ratioLag.max(0.001))).clip(0.1, 20000);
@@ -109,9 +121,8 @@ KaijaSynth : KassiaSynth {
 			osc = VarSaw.ar(f, iphase: ph, width: 0.5);
 			osc = RLPF.ar(osc, partLPF.clip(50, 20000), partLPFRQ.clip(0.05, 1.0));
 
-			// Per-partial AM
-			am  = SinOsc.kr(amRateSm.max(0.000001)).range(1 - amDepthSm, 1).clip(0, 1);
-			per = osc * am * levelsSm;
+			// Per-partial ASR × level → mix
+			per = osc * partEnvs * levelsSm;
 			sig = Mix(per);
 
 			// Pink noise mixed in parallel before drive/filter chain
@@ -122,7 +133,6 @@ KaijaSynth : KassiaSynth {
 
 			vpos = Lag.kr(vowelPos.clip(0, 4), 0.1);
 
-			// vowelMix hardcoded to 1.0, vowelRQ hardcoded to 1.0
 			sig = FormantVowel.process(
 				sig,
 				rootHz:   root,
@@ -135,11 +145,10 @@ KaijaSynth : KassiaSynth {
 			sig = MoogFF.ar(sig, vcfCut, vcfRQSm.linlin(0, 1, 0.0, 4.0));
 			sig = LeakDC.ar(sig);
 
-			// Amplitude envelope × velocity × master
+			// Main ADSR × velocity × master
 			sig = sig * env * velocity * mstr;
 			sig = Limiter.ar(sig, 0.99, 0.01);
 
-			// Output as stereo (centred)
 			Out.ar(out, sig ! 2);
 		}).add;
 	}
@@ -152,18 +161,20 @@ KaijaSynth : KassiaSynth {
 	// freq:     frequency in Hz (from scale lookup)
 	// velocity: normalised 0–1
 	// server:   SC server
-	noteOn { |freq, velocity=1.0, master=0.15, server|
-		// Apply square root curve so soft notes remain audible
+	noteOn { |freq, velocity=1.0, master=0.5, server|
 		var scaledVel = velocity.sqrt;
 		server = server ? Server.default;
 		node = Synth(defName, [
 			\root,     freq,
 			\velocity, scaledVel,
-			\master,   0.0,
-			\gate,     1
+			\master,   master,
+			\gate,     1,
+			\ratios,   state[\ratios],
+			\levels,   state[\levels],
+			\phase,    state[\phase],
+			\partAtk,  state[\partAtk],
+			\partRel,  state[\partRel]
 		], server);
-		this.prPushAll;
-		SystemClock.sched(0.05, { node.set(\master, master); nil });
 	}
 
 	// Release a note normally — goes through release envelope.
@@ -189,8 +200,8 @@ KaijaSynth : KassiaSynth {
 			node.setn(\ratios,  state[\ratios]);
 			node.setn(\levels,  state[\levels]);
 			node.setn(\phase,   state[\phase]);
-			node.setn(\amRate,  state[\amRate]);
-			node.setn(\amDepth, state[\amDepth]);
+			node.setn(\partAtk, state[\partAtk]);
+			node.setn(\partRel, state[\partRel]);
 		};
 	}
 
