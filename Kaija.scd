@@ -60,7 +60,7 @@ s.waitForBoot {
 
 	// --- Window ---
 	// Window width: 9 strips × 81px + 4px margin
-	win = Window("Kaija", Rect(20, 20, (9 * 81) + 4, 470)).front;
+	win = Window("Kaija", Rect(20, 20, (9 * 81) + 4, 525)).front;
 
 	win.onClose_({
 		view.free;

@@ -15,6 +15,7 @@ KaijaView {
 	var win;          // Window
 
 	var top, mid;     // CompositeViews
+	var presetRow;    // CompositeView for preset controls
 	var voiceRow;     // CompositeView for voice activity indicators
 	var voiceLights;  // Array of Views (voice activity indicators)
 
@@ -24,6 +25,9 @@ KaijaView {
 	var tiltNb, tiltSl;
 	var scaleNameTxt;
 	var masterSl, masterNb;
+
+	// Preset widgets
+	var presetMenu, presetNameField;
 
 	// Per-partial strip widget arrays
 	var freqNb, freqPitchTxt;
@@ -40,8 +44,8 @@ KaijaView {
 		ctrl = c;
 		win  = w;
 
-		uiFont      = Font("Liberation Sans", 9);
-		smFont      = Font("Liberation Sans", 7);
+		uiFont      = KassiaPlatform.uiFont(9);
+		smFont      = KassiaPlatform.btnFont(7);
 		dark        = Color.grey(0.92);
 		stripBg     = Color.grey(0.82);
 		txtCol      = Color.black;
@@ -123,6 +127,19 @@ KaijaView {
 			{ if(scaleNameTxt.notNil) { scaleNameTxt.string = name } }.defer;
 		});
 
+		ctrl.addListener(\presets, { |names|
+			{ if(presetMenu.notNil) {
+				presetMenu.items_(["— presets —", "Load file..."] ++ names);
+			}}.defer;
+		});
+
+		ctrl.addListener(\presetLoaded, { |name|
+			{ if(presetMenu.notNil) {
+				var idx = (["— presets —", "Load file..."] ++ ctrl.presetBank.names).indexOf(name) ?? { 0 };
+				presetMenu.value_(idx);
+			}}.defer;
+		});
+
 	}
 
 	// ------------------------------------------------------------------
@@ -132,26 +149,26 @@ KaijaView {
 	buildUI {
 		var winW, winH, startX, stripW, uiW;
 
-		if(top.notNil)     { top.remove;     top = nil };
-		if(mid.notNil)      { mid.remove;      mid = nil };
-		if(voiceRow.notNil) { voiceRow.remove; voiceRow = nil };
+		if(top.notNil)       { top.remove;       top = nil };
+		if(presetRow.notNil) { presetRow.remove;  presetRow = nil };
+		if(voiceRow.notNil)  { voiceRow.remove;   voiceRow = nil };
+		if(mid.notNil)       { mid.remove;        mid = nil };
 
 		ratioNb = nil; ratioSl = nil;
 		indexNb = nil; indexSl = nil;
 		tiltNb  = nil; tiltSl  = nil;
-		scaleNameTxt = nil;
-		masterSl = nil; masterNb = nil;
-		voiceLights  = Array.newClear(ctrl.voices.size);
-		// 9 strips: 8 partials + 1 noise
-		freqNb       = Array.newClear(ctrl.voices[0].num);
-		freqPitchTxt = Array.newClear(ctrl.voices[0].num);
-		levelSl      = Array.newClear(ctrl.voices[0].num + 1);
-		levelNb      = Array.newClear(ctrl.voices[0].num + 1);
+		scaleNameTxt  = nil;
+		masterSl      = nil; masterNb     = nil;
+		presetMenu    = nil; presetNameField = nil;
+		voiceLights   = Array.newClear(ctrl.voices.size);
+		freqNb        = Array.newClear(ctrl.voices[0].num);
+		freqPitchTxt  = Array.newClear(ctrl.voices[0].num);
+		levelSl       = Array.newClear(ctrl.voices[0].num + 1);
+		levelNb       = Array.newClear(ctrl.voices[0].num + 1);
 
 		winW = win.bounds.width;
 		winH = win.bounds.height;
 
-		// 9 strips at 81px each (10% narrower than 90px)
 		startX = 4;
 		stripW = 81;
 		uiW    = startX + (9 * stripW);
@@ -161,13 +178,17 @@ KaijaView {
 		top = CompositeView(win, Rect(0, 0, uiW, 140));
 		top.background_(dark);
 
-		voiceRow = CompositeView(win, Rect(0, 140, uiW, 24));
+		presetRow = CompositeView(win, Rect(0, 140, uiW, 24));
+		presetRow.background_(dark);
+
+		voiceRow = CompositeView(win, Rect(0, 164, uiW, 24));
 		voiceRow.background_(dark);
 
-		mid = CompositeView(win, Rect(0, 164, uiW, 270));
+		mid = CompositeView(win, Rect(0, 188, uiW, 310));
 		mid.background_(dark);
 
 		this.prBuildTopBar(uiW);
+		this.prBuildPresetRow(uiW);
 		this.prBuildVoiceRow(uiW);
 		this.prBuildStrips(startX, stripW);
 		this.prMakeNoiseStrip(startX + (ctrl.voices[0].num * stripW), stripW);
@@ -188,7 +209,7 @@ KaijaView {
 		var x, labelW, key;
 		var btnFont;
 
-		btnFont = Font("Liberation Sans", 7);
+		btnFont = KassiaPlatform.btnFont(7);
 
 		nb   = 44;   // numberbox width
 		sl   = 0;    // calculated per row
@@ -201,7 +222,7 @@ KaijaView {
 
 		// mod ratio
 		StaticText(top, Rect(c0 + 4, 6, 56, 16))
-			.string_("mod ratio").stringColor_(txtCol).font_(Font("Liberation Sans", 8));
+			.string_("mod ratio").stringColor_(txtCol).font_(KassiaPlatform.uiFont(8));
 		ratioSl = Slider(top, Rect(c0 + 62, 8, seg4 - nb - 68, 12))
 			.value_(ctrl.model.ratio.explin(0.125, 8.0, 0, 1))
 			.background_(fmCol)
@@ -359,6 +380,103 @@ KaijaView {
 	}
 
 	// ------------------------------------------------------------------
+	// Preset row
+	// ------------------------------------------------------------------
+
+	prBuildPresetRow { |uiW|
+		var btnFont;
+		btnFont = KassiaPlatform.btnFont(7);
+
+		// Dropdown: "— presets —", "Load file...", then preset names
+		// Selecting a preset loads it; selecting "Load file..." opens dialog
+		presetMenu = PopUpMenu(presetRow, Rect(4, 3, 200, 18))
+			.items_(["— presets —", "Load file..."])
+			.font_(uiFont)
+			.action_({ |m|
+				if(m.value == 1) {
+					// Load file...
+					Dialog.openPanel(
+						okFunc: { |p|
+							("Loading presets from: " ++ p).postln;
+							ctrl.readPresets(p);
+						},
+						cancelFunc: { presetMenu.value_(0) },
+						path: KassiaPlatform.ensurePresetsDir("kaija")
+					);
+				} {
+					if(m.value > 1) {
+						var name = ctrl.presetBank.names[m.value - 2];
+						ctrl.loadPreset(name);
+					};
+				};
+			});
+
+		presetNameField = TextField(presetRow, Rect(210, 3, 130, 18))
+			.string_("preset name")
+			.font_(uiFont);
+
+		// Save: saves to memory, auto-saves to disk if a path is known
+		Button(presetRow, Rect(344, 3, 38, 18))
+			.states_([["Save"]])
+			.font_(btnFont)
+			.action_({
+				var name = presetNameField.string.stripWhiteSpace;
+				if(name.size > 0 and: { name != "preset name" }) {
+					ctrl.savePreset(name);
+				} {
+					presetNameField.string_("⚠ enter a name");
+				};
+			});
+
+		Button(presetRow, Rect(386, 3, 44, 18))
+			.states_([["Delete"]])
+			.font_(btnFont)
+			.action_({
+				if(presetMenu.value > 1) {
+					var name = ctrl.presetBank.names[presetMenu.value - 2];
+					ctrl.deletePreset(name);
+					presetMenu.value_(0);
+				};
+			});
+
+		Button(presetRow, Rect(434, 3, 54, 18))
+			.states_([["Save file"]])
+			.font_(btnFont)
+			.action_({
+				var name, path;
+				name = presetNameField.string.stripWhiteSpace;
+
+				// Auto-save current name to memory if valid
+				if(name.size > 0 and: { name != "preset name" }) {
+					ctrl.savePreset(name);
+				};
+
+				if(ctrl.presetBank.size == 0) {
+					presetNameField.string_("⚠ enter a preset name first");
+				} {
+					// If bank path already set, save directly
+					if(ctrl.bankPath.notNil) {
+						if(ctrl.writePresets(ctrl.bankPath)) {
+							presetNameField.string_("✓ saved");
+						} {
+							presetNameField.string_("⚠ save failed");
+						};
+					} {
+						// First time — use preset name as filename, save to default dir
+						var saveName = if(name.size > 0 and: { name != "preset name" })
+							{ name } { "kaija_presets" };
+						path = KassiaPlatform.ensurePresetsDir("kaija") ++ "/" ++ saveName ++ ".json";
+						if(ctrl.writePresets(path)) {
+							presetNameField.string_("✓ saved: " ++ saveName);
+						} {
+							presetNameField.string_("⚠ save failed");
+						};
+					};
+				};
+			});
+	}
+
+	// ------------------------------------------------------------------
 	// Voice activity row — voices on left, scale controls on right
 	// ------------------------------------------------------------------
 
@@ -388,17 +506,16 @@ KaijaView {
 			.string_(ctrl.scale.name).stringColor_(txtCol).font_(uiFont);
 		Button(voiceRow, Rect(scaleX + 86, 3, 50, 18))
 			.states_([["Load scale"]])
-			.font_(Font("Liberation Sans", 7))
+			.font_(KassiaPlatform.btnFont(7))
 			.action_({
 				Dialog.openPanel(
 					okFunc: { |p| ctrl.loadScale(p) },
 					cancelFunc: {},
-					fileTypes: ["scl"]
 				);
 			});
 		Button(voiceRow, Rect(scaleX + 140, 3, 50, 18))
 			.states_([["Clear scale"]])
-			.font_(Font("Liberation Sans", 7))
+			.font_(KassiaPlatform.btnFont(7))
 			.action_({ ctrl.clearScale });
 
 		// Master level — right of scale controls
@@ -435,7 +552,7 @@ KaijaView {
 		nb    = sw - 4;       // numberbox width fits strip
 		sl    = sw - 4;       // slider width fits strip
 
-		strip = CompositeView(mid, Rect(x0, 4, sw, 260));
+		strip = CompositeView(mid, Rect(x0, 4, sw, 300));
 		strip.background_(stripBg);
 
 		// Freq readout — number box only, pitch below
@@ -458,17 +575,30 @@ KaijaView {
 				ctrl.setPartialParamAt(\levels, i, lv);
 			});
 
-		// amHz
+		// Per-partial attack
 		StaticText(strip, Rect(2, 216, sl, 12))
-			.string_("amHz").stringColor_(txtCol).font_(Font("Liberation Sans", 8));
+			.string_("atk").stringColor_(txtCol).font_(KassiaPlatform.uiFont(8));
 		this.prMakeSliderNb(strip,
 			slRect: Rect(2, 228, sl, 10),
 			nbRect: Rect(2, 240, sl, 14),
-			initVal: 0.05,
+			initVal: 0.0,
 			bg: amCol,
-			toSlider: { |v| v.explin(0.0001, 2.0, 0, 1) },
-			fromSlider: { |v| v.linexp(0, 1, 0.0001, 2.0) },
-			action: { |v| ctrl.setPartialParamAt(\amRate, i, v) }
+			toSlider: { |v| v.linlin(0.0, 2.0, 0, 1) },
+			fromSlider: { |v| v.linlin(0, 1, 0.0, 2.0) },
+			action: { |v| ctrl.setPartialParamAt(\partAtk, i, v) }
+		);
+
+		// Per-partial release
+		StaticText(strip, Rect(2, 256, sl, 12))
+			.string_("rel").stringColor_(txtCol).font_(KassiaPlatform.uiFont(8));
+		this.prMakeSliderNb(strip,
+			slRect: Rect(2, 268, sl, 10),
+			nbRect: Rect(2, 280, sl, 14),
+			initVal: 0.0,
+			bg: amCol,
+			toSlider: { |v| v.linlin(0.0, 4.0, 0, 1) },
+			fromSlider: { |v| v.linlin(0, 1, 0.0, 4.0) },
+			action: { |v| ctrl.setPartialParamAt(\partRel, i, v) }
 		);
 	}
 
@@ -478,14 +608,14 @@ KaijaView {
 		sw       = stripW - 6;
 		noiseIdx = ctrl.voices[0].num;  // index 8, after the 8 partials
 
-		strip = CompositeView(mid, Rect(x0, 4, sw, 260));
+		strip = CompositeView(mid, Rect(x0, 4, sw, 300));
 		strip.background_(stripBg);
 
 		StaticText(strip, Rect(2, 2, sw - 2, 14))
 			.string_("noise").stringColor_(txtCol).font_(uiFont);
 
 		StaticText(strip, Rect(2, 18, sw - 2, 12))
-			.string_("pink").stringColor_(txtCol).font_(Font("Liberation Sans", 8));
+			.string_("pink").stringColor_(txtCol).font_(KassiaPlatform.uiFont(8));
 
 		levelSl[noiseIdx] = Slider(strip, Rect(2, 34, 14, 162))
 			.value_(0.0).background_(lvlCol)

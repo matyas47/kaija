@@ -14,6 +14,8 @@ KaijaController {
 	var <model;          // KaijaSpectralModel
 	var <voices;         // Array of KaijaSynth (voice pool)
 	var <scale;          // KaijaScale
+	var <presetBank;     // PresetBank
+	var <bankPath;       // current bank file path for auto-save
 	var listeners;       // Dictionary of Arrays of callbacks
 	var server;          // SC server
 
@@ -45,6 +47,9 @@ KaijaController {
 		scale          = sc ?? { KaijaScale.new };
 		server         = srv ?? { Server.default };
 		listeners      = Dictionary.new;
+		presetBank     = PresetBank.new;
+		bankPath       = nil;
+		presetBank.onChanged({ |names| this.notify(\presets, names) });
 		midiChannel    = nil;
 		timbreCCNum    = 74;
 		timbreRange    = 3.0;
@@ -193,6 +198,73 @@ KaijaController {
 		sustainedNotes = Set.new;
 		sustainPedal   = false;
 		this.notify(\voiceActivity, Array.fill(voices.size, { false }));
+	}
+
+	// ------------------------------------------------------------------
+	// Presets
+	// ------------------------------------------------------------------
+
+	savePreset { |name|
+		var snap, v0;
+		v0   = voices[0];
+		snap = (
+			ratio:       model.ratio,
+			index:       model.index,
+			tilt:        model.tilt,
+			levels:      v0.getState(\levels).copy,
+			phase:       v0.getState(\phase).copy,
+			partAtk:     v0.getState(\partAtk).copy,
+			partRel:     v0.getState(\partRel).copy
+		);
+		synthParams.keysValuesDo({ |k, v| snap[k] = v });
+		presetBank.save(name, snap);
+		if(bankPath.notNil) { presetBank.writeToFile(bankPath) };
+		this.notify(\presets, presetBank.names);
+	}
+
+	loadPreset { |name|
+		var snap;
+		snap = presetBank.load(name);
+		if(snap.isNil) { ("KaijaController: preset not found: " ++ name).warn; ^this };
+
+		if(snap[\ratio].notNil)   { this.setRatio(snap[\ratio]) };
+		if(snap[\index].notNil)   { this.setIndex(snap[\index]) };
+		if(snap[\tilt].notNil)    { this.setTilt(snap[\tilt]) };
+
+		if(snap[\levels].notNil)  { this.setPartialParam(\levels,  snap[\levels]) };
+		if(snap[\phase].notNil)   { this.setPartialParam(\phase,   snap[\phase]) };
+		if(snap[\partAtk].notNil) { this.setPartialParam(\partAtk, snap[\partAtk]) };
+		if(snap[\partRel].notNil) { this.setPartialParam(\partRel, snap[\partRel]) };
+
+		synthParams.keys.do({ |k|
+			if(snap[k].notNil) { this.set(k, snap[k]) };
+		});
+
+		this.notify(\presetLoaded, name);
+	}
+
+	deletePreset { |name|
+		presetBank.delete(name);
+		if(bankPath.notNil) { presetBank.writeToFile(bankPath) };
+		this.notify(\presets, presetBank.names);
+	}
+
+	writePresets { |path|
+		bankPath = path;
+		^presetBank.writeToFile(path)
+	}
+
+	readPresets { |path|
+		var result;
+		result = presetBank.readFromFile(path);
+		if(result) {
+			bankPath = path;
+			this.notify(\presets, presetBank.names);
+			if(presetBank.size > 0) {
+				this.loadPreset(presetBank.names[0]);
+			};
+		};
+		^result
 	}
 
 	// ------------------------------------------------------------------
