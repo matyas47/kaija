@@ -33,7 +33,7 @@ KaijaView {
 	var freqNb, freqPitchTxt;
 	var levelSl, levelNb;
 
-	var uiFont, smFont, dark, stripBg, txtCol, lvlCol, panCol, amCol, fmCol;
+	var uiFont, smFont, dark, stripBg, txtCol, lvlCol, ctrlCol, fmCol;
 	var activeCol, inactiveCol;
 
 	*new { |controller, window|
@@ -50,9 +50,8 @@ KaijaView {
 		stripBg     = Color.grey(0.82);
 		txtCol      = Color.black;
 		lvlCol      = Color.grey(0.93);
-		panCol      = Color.grey(0.80);
-		amCol       = Color.grey(0.80);
-		fmCol       = Color.grey(0.80);
+		ctrlCol     = Color.grey(0.80);   // shared by all non-level controls
+		fmCol       = Color.grey(0.80);   // FM-specific (ratio/index/tilt)
 		activeCol   = Color(0.3, 0.7, 0.4);
 		inactiveCol = Color.grey(0.65);
 
@@ -65,6 +64,31 @@ KaijaView {
 	// ------------------------------------------------------------------
 
 	prRegisterListeners {
+
+		ctrl.addListener(\refresh, { |carrier, ratio, index, tilt, modHz, absFreqs, amps|
+			{
+				if(ratioNb.notNil) { ratioNb.value = ratio.round(0.001) };
+				if(ratioSl.notNil) { ratioSl.value = ratio.explin(0.125, 8.0, 0, 1) };
+				if(indexNb.notNil) { indexNb.value = index.round(0.001) };
+				if(indexSl.notNil) { indexSl.value = index.linlin(0.0, 10.0, 0, 1) };
+				if(tiltNb.notNil)  { tiltNb.value  = tilt.round(0.001) };
+				if(tiltSl.notNil)  { tiltSl.value  = tilt.linlin(-1.0, 1.0, 0, 1) };
+				ctrl.voices[0].num.do { |i|
+					if(freqNb.notNil and: { freqNb[i].notNil }) {
+						freqNb[i].value = absFreqs[i].round(0.01);
+					};
+					if(freqPitchTxt.notNil and: { freqPitchTxt[i].notNil }) {
+						freqPitchTxt[i].string = PitchView.hzToPitchString(absFreqs[i], 0.1);
+					};
+					if(levelSl.notNil and: { levelSl[i].notNil }) {
+						levelSl[i].value = amps[i];
+					};
+					if(levelNb.notNil and: { levelNb[i].notNil }) {
+						levelNb[i].value = amps[i].round(0.001);
+					};
+				};
+			}.defer;
+		});
 
 		ctrl.addListener(\ratio, { |r|
 			{ if(ratioNb.notNil) { ratioNb.value = r.round(0.001) };
@@ -118,7 +142,7 @@ KaijaView {
 		});
 
 		ctrl.addListener(\master, { |v|
-			{ if(masterSl.notNil) { masterSl.value = v.linlin(0, 1, 0, 1) };
+			{ if(masterSl.notNil) { masterSl.value = v };
 			  if(masterNb.notNil) { masterNb.value = v.round(0.001) };
 			}.defer;
 		});
@@ -265,11 +289,11 @@ KaijaView {
 		// Row 2: att | dec | sus | rel | env→vcf
 		seg5 = (uiW / 5).floor.asInteger;
 		[
-			["att",     0.01, { |v| v.explin(0.001,10,0,1) }, { |v| v.linexp(0,1,0.001,10) }, \attack],
-			["dec",     0.3,  { |v| v.explin(0.001,10,0,1) }, { |v| v.linexp(0,1,0.001,10) }, \decay],
-			["sus",     0.7,  { |v| v },                       { |v| v.clip(0,1) },             \sustain],
-			["rel",     0.5,  { |v| v.explin(0.001,10,0,1) }, { |v| v.linexp(0,1,0.001,10) }, \release],
-			["env→vcf", 0.5,  { |v| v },                       { |v| v.clip(0,1) },             \vcfEnvAmt]
+			["att",     0.01, { |v| v.explin(0.001,10,0,1) }, { |v| v.linexp(0,1,0.001,10) }, \attack,    3],
+			["dec",     0.3,  { |v| v.explin(0.001,10,0,1) }, { |v| v.linexp(0,1,0.001,10) }, \decay,     2],
+			["sus",     0.7,  { |v| v },                       { |v| v.clip(0,1) },             \sustain,   2],
+			["rel",     0.5,  { |v| v.explin(0.001,10,0,1) }, { |v| v.linexp(0,1,0.001,10) }, \release,   2],
+			["env→vcf", 0.5,  { |v| v },                       { |v| v.clip(0,1) },             \vcfEnvAmt, 2]
 		].do({ |spec, i|
 			var capturedKey;
 			x           = seg5 * i;
@@ -281,20 +305,21 @@ KaijaView {
 				slRect: Rect(x + labelW + 6, 40, seg5 - nb - labelW - 12, 12),
 				nbRect: Rect(x + seg5 - nb - 2, 36, nb, 18),
 				initVal: spec[1],
-				bg: amCol,
+				bg: ctrlCol,
 				toSlider: spec[2],
 				fromSlider: spec[3],
-				action: { |v| ctrl.set(capturedKey, v) }
+				action: { |v| ctrl.set(capturedKey, v) },
+				decimals: spec[5]
 			);
 		});
 
 		// Row 3: vcf | Q | drv | vPos  (vMix hardcoded 1.0, vRQ hardcoded 1.0)
 		seg6 = (uiW / 4).floor.asInteger;
 		[
-			["vcf",  2000,  { |v| v.explin(20,20000,0,1) },  { |v| v.linexp(0,1,20,20000) },  \vcfFreq,  panCol],
-			["Q",    0.35,  { |v| v.linlin(0.05,0.95,0,1) }, { |v| v.linlin(0,1,0.05,0.95) }, \vcfRQ,    panCol],
-			["drv",  1.0,   { |v| v.explin(0.25,8,0,1) },   { |v| v.linexp(0,1,0.25,8) },    \drive,    panCol],
-			["vPos", 0.375, { |v| v },                       { |v| v },                        \vowelPos4, amCol]
+			["vcf",  2000,  { |v| v.explin(20,20000,0,1) },  { |v| v.linexp(0,1,20,20000) },  \vcfFreq,  ctrlCol, 0],
+			["Q",    0.35,  { |v| v.linlin(0.05,0.95,0,1) }, { |v| v.linlin(0,1,0.05,0.95) }, \vcfRQ,    ctrlCol, 2],
+			["drv",  1.0,   { |v| v.explin(0.25,8,0,1) },   { |v| v.linexp(0,1,0.25,8) },    \drive,    ctrlCol, 2],
+			["vPos", 0.375, { |v| v },                       { |v| v },                        \vowelPos4, ctrlCol, 2]
 		].do({ |spec, i|
 			var capturedKey;
 			x           = seg6 * i;
@@ -314,7 +339,8 @@ KaijaView {
 					if(capturedKey == \vowelPos4)
 						{ ctrl.set(\vowelPos, v * 4) }
 						{ ctrl.set(capturedKey, v) };
-				}
+				},
+				decimals: spec[6]
 			);
 		});
 
@@ -355,10 +381,11 @@ KaijaView {
 			slRect: Rect(326, 108, 90, 10),
 			nbRect: Rect(418, 104, 36, 18),
 			initVal: 0.5,
-			bg: panCol,
+			bg: ctrlCol,
 			toSlider: { |v| v.explin(0.001, 10.0, 0, 1) },
 			fromSlider: { |v| v.linexp(0, 1, 0.001, 10.0) },
-			action: { |v| ctrl.set(\vcfLFORate, v) }
+			action: { |v| ctrl.set(\vcfLFORate, v) },
+			decimals: 2
 		);
 
 		StaticText(top, Rect(460, 106, 40, 14))
@@ -367,10 +394,11 @@ KaijaView {
 			slRect: Rect(500, 108, 90, 10),
 			nbRect: Rect(592, 104, 36, 18),
 			initVal: 0.0,
-			bg: panCol,
+			bg: ctrlCol,
 			toSlider: { |v| v },
 			fromSlider: { |v| v.clip(0, 1) },
-			action: { |v| ctrl.set(\vcfLFODepth, v) }
+			action: { |v| ctrl.set(\vcfLFODepth, v) },
+			decimals: 2
 		);
 
 		Button(top, Rect(634, 104, 60, 18))
@@ -510,7 +538,7 @@ KaijaView {
 			.action_({
 				Dialog.openPanel(
 					okFunc: { |p| ctrl.loadScale(p) },
-					cancelFunc: {},
+					cancelFunc: {}
 				);
 			});
 		Button(voiceRow, Rect(scaleX + 140, 3, 50, 18))
@@ -582,10 +610,11 @@ KaijaView {
 			slRect: Rect(2, 228, sl, 10),
 			nbRect: Rect(2, 240, sl, 14),
 			initVal: 0.0,
-			bg: amCol,
+			bg: ctrlCol,
 			toSlider: { |v| v.linlin(0.0, 2.0, 0, 1) },
 			fromSlider: { |v| v.linlin(0, 1, 0.0, 2.0) },
-			action: { |v| ctrl.setPartialParamAt(\partAtk, i, v) }
+			action: { |v| ctrl.setPartialParamAt(\partAtk, i, v) },
+			decimals: 2
 		);
 
 		// Per-partial release
@@ -595,10 +624,11 @@ KaijaView {
 			slRect: Rect(2, 268, sl, 10),
 			nbRect: Rect(2, 280, sl, 14),
 			initVal: 0.0,
-			bg: amCol,
+			bg: ctrlCol,
 			toSlider: { |v| v.linlin(0.0, 4.0, 0, 1) },
 			fromSlider: { |v| v.linlin(0, 1, 0.0, 4.0) },
-			action: { |v| ctrl.setPartialParamAt(\partRel, i, v) }
+			action: { |v| ctrl.setPartialParamAt(\partRel, i, v) },
+			decimals: 2
 		);
 	}
 
@@ -644,20 +674,22 @@ KaijaView {
 	}
 
 	prMakeSliderNb { |parent, slRect, nbRect, initVal, bg,
-	                  toSlider, fromSlider, action|
-		var sl, nb;
+	                  toSlider, fromSlider, action, decimals=3|
+		var sl, nb, step;
+
+		step = (10 ** decimals.neg);
 
 		sl = Slider(parent, slRect)
 			.value_(toSlider.(initVal))
 			.background_(bg);
 
 		nb = NumberBox(parent, nbRect)
-			.decimals_(3).step_(0.001).font_(uiFont)
+			.decimals_(decimals).step_(step).font_(uiFont)
 			.value_(initVal);
 
 		sl.action_({ |s|
 			var v = fromSlider.(s.value);
-			nb.value = v.round(0.001);
+			nb.value = v.round(step);
 			action.(v);
 		});
 

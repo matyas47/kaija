@@ -4,8 +4,10 @@
 // Computes FM-derived partial frequencies and amplitudes
 // from carrier, ratio, index, and tilt parameters.
 //
-// Amplitudes are normalised to 0–1 after tilt is applied.
-// Scaling to synth gain levels is the render engine's responsibility.
+// Subclasses override prNormalise to apply different amplitude
+// normalisation strategies (peak normalise vs RMS normalise).
+//
+// Requires: FMRatioPartials.sc
 
 KassiaSpectralModel {
 
@@ -14,9 +16,8 @@ KassiaSpectralModel {
     var <>index;        // FM index
     var <>numPartials;  // number of partials to use
     var <>tilt;         // spectral tilt: 0.0 = neutral, >0 = brighter, <0 = darker
-    var <>density;      // partial density/pruning threshold (future — 0.0 = all partials)
 
-    var <freqs;         // computed partial frequencies, as ratios relative to carrier
+    var <freqs;         // computed partial ratios relative to carrier
     var <amps;          // computed partial amplitudes, normalised 0–1
 
     *new { |carrier=55, ratio=1.0, index=3.0, numPartials=8, tilt=0.0|
@@ -29,76 +30,78 @@ KassiaSpectralModel {
         index       = i.asFloat.clip(0.0, 10.0);
         numPartials = n.asInteger.max(1);
         tilt        = t.asFloat.clip(-1.0, 1.0);
-        density     = 0.0;
         freqs       = Array.newClear(numPartials);
         amps        = Array.newClear(numPartials);
         this.compute;
     }
 
     // Recompute partials from current parameters.
-    // Call this after changing any parameter directly.
+    // Shared pipeline: FM -> tilt -> subclass normalisation.
     compute {
-        var obj, rawFreqs, rawAmps, mx;
+        var rawFreqs, rawAmps, raw;
 
         carrier = carrier.max(0.1);
         ratio   = ratio.clip(0.125, 8.0);
         index   = index.clip(0.0, 10.0);
         tilt    = tilt.clip(-1.0, 1.0);
 
-        obj      = FMRatioPartials.new(carrier, ratio, index, 200);
-        rawFreqs = obj.freqs.asArray.collect(_.asFloat).copyRange(0, numPartials - 1);
-        rawAmps  = obj.amps.asArray.collect({ |a| a.asFloat.abs }).copyRange(0, numPartials - 1);
+        // Derive partials from FM spectrum
+        raw      = this.prComputeRaw;
+        rawFreqs = raw[0];
+        rawAmps  = raw[1];
 
-        // Apply spectral tilt as a power law across partial index.
-        // Each partial is weighted by (partialNumber ** tilt), shifting
-        // the spectral centroid up (tilt > 0) or down (tilt < 0).
+        // Spectral tilt — power law weighting across partial index
         if(tilt != 0.0) {
             rawAmps = rawAmps.collect({ |a, i|
                 a * ((i + 1).asFloat ** tilt)
             });
         };
 
-        // Future hook: density/pruning
-        // rawAmps = this.applyDensity(rawAmps);
-
-        // Normalise amplitudes to 0–1 after tilt
-        mx      = rawAmps.maxItem.max(1e-12);
-        rawAmps = rawAmps / mx;
-
-        // Store frequencies as ratios relative to carrier
+        // Subclass hook: normalise amplitudes to 0–1
+        amps  = this.prNormalise(rawAmps);
         freqs = rawFreqs.collect({ |f| (f / carrier).asFloat });
-        amps  = rawAmps.collect(_.asFloat);
     }
 
     // Convenience setters — update parameter and recompute
-    setCarrier { |hz|
-        carrier = hz.asFloat.max(0.1);
-        this.compute;
-    }
-
-    setRatio { |r|
-        ratio = r.asFloat.clip(0.125, 8.0);
-        this.compute;
-    }
-
-    setIndex { |i|
-        index = i.asFloat.clip(0.0, 10.0);
-        this.compute;
-    }
-
-    setTilt { |t|
-        tilt = t.asFloat.clip(-1.0, 1.0);
-        this.compute;
-    }
+    setCarrier { |hz|  carrier = hz.asFloat.max(0.1);        this.compute }
+    setRatio   { |r|   ratio   = r.asFloat.clip(0.125, 8.0); this.compute }
+    setIndex   { |i|   index   = i.asFloat.clip(0.0, 10.0);  this.compute }
+    setTilt    { |t|   tilt    = t.asFloat.clip(-1.0, 1.0);  this.compute }
 
     // Modulator frequency in Hz (for display)
-    modHz {
-        ^(carrier * ratio)
+    modHz { ^(carrier * ratio) }
+
+    // Absolute partial frequencies in Hz
+    absFreqs { ^freqs.collect({ |r| (r * carrier).asFloat }) }
+
+    // ------------------------------------------------------------------
+    // Private — override in subclasses for different normalisation
+    // ------------------------------------------------------------------
+
+    // Compute raw FM-derived [freqs, amps] arrays before tilt/normalisation.
+    // FMRatioPartials may return fewer than numPartials entries when index is
+    // very small (only the carrier survives). Pad missing slots with carrier
+    // frequency and zero amplitude so downstream code always sees full arrays.
+    prComputeRaw {
+        var obj, allFreqs, allAmps, rawFreqs, rawAmps, n;
+        obj      = FMRatioPartials.new(carrier, ratio, index, 200);
+        allFreqs = obj.freqs.asArray.collect(_.asFloat);
+        allAmps  = obj.amps.asArray.collect({ |a| a.asFloat.abs });
+        n        = allFreqs.size;
+        rawFreqs = Array.fill(numPartials, { |i|
+            if(i < n) { allFreqs[i] } { carrier }
+        });
+        rawAmps  = Array.fill(numPartials, { |i|
+            if(i < n) { allAmps[i] } { 0.0 }
+        });
+        ^[rawFreqs, rawAmps]
     }
 
-    // Absolute partial frequencies in Hz (freqs are stored as ratios)
-    absFreqs {
-        ^freqs.collect({ |r| (r * carrier).asFloat })
+    // Peak normalise: scale so maximum amplitude = 1.0
+    // Subclasses may override for RMS normalise or other strategies.
+    prNormalise { |rawAmps|
+        var mx = rawAmps.maxItem.max(1e-12);
+        ^(rawAmps / mx).collect(_.asFloat)
     }
 
 }

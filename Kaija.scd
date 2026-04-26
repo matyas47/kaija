@@ -1,5 +1,5 @@
 // Kaija.scd
-// Launcher for Kaija v0.1
+// Launcher for Kaija v0.5
 //
 // Boots the server if needed, then creates the model, voice pool,
 // scale, controller, and view in the correct order.
@@ -44,7 +44,7 @@ s.waitForBoot {
 	s.sync;
 
 	voices = Array.fill(numVoices, {
-		KaijaSynth(num: numPartials, partialGain: 0.14)
+		KaijaSynth(num: numPartials)
 	});
 
 	// --- Scale ---

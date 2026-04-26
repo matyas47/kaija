@@ -26,9 +26,12 @@ KaijaSynth : KassiaSynth {
 	classvar <>defName = \kaija_core;
 
 	// Override init — reduced state (no pans, fmRate, fmDepthCents, amRate, amDepth)
+	// Kaija also skips partialGain scaling — RMS normalisation already produces
+	// usable amplitudes, and direct correspondence between slider and synth
+	// makes presets and UI behaviour unambiguous.
 	init { |n, pg|
 		num         = n.asInteger.max(1);
-		partialGain = pg.asFloat;
+		partialGain = 1.0;   // forced to unity in Kaija; pg arg ignored
 		state = (
 			ratios:  (1..num).collect(_.asFloat),
 			levels:  Array.fill(num, 0.0),
@@ -157,10 +160,16 @@ KaijaSynth : KassiaSynth {
 	// Note event API
 	// ------------------------------------------------------------------
 
-	// Start a note. Called by the controller on MIDI note-on.
-	// freq:     frequency in Hz (from scale lookup)
-	// velocity: normalised 0–1
-	// server:   SC server
+	// Start a note with a pre-built args array.
+	// Used by KaijaController to bundle all per-note parameters into a single
+	// OSC message at Synth creation, avoiding post-creation `set` calls.
+	noteOnWithArgs { |args, server|
+		server = server ? Server.default;
+		node = Synth(defName, args, server);
+	}
+
+	// Legacy single-note entry point — kept for potential external callers.
+	// New code should prefer noteOnWithArgs for performance.
 	noteOn { |freq, velocity=1.0, master=0.5, server|
 		var scaledVel = velocity.sqrt;
 		server = server ? Server.default;
@@ -177,10 +186,16 @@ KaijaSynth : KassiaSynth {
 		], server);
 	}
 
-	// Release a note normally — goes through release envelope.
+	// Release a note — sends gate=0 to trigger the release envelope,
+	// then immediately nils the node reference.
+	// Note: the server-side node continues running through the release tail,
+	// but nilling node here frees this voice for reallocation. This means
+	// the voice activity light goes dark before the release actually finishes,
+	// and in extreme cases (8 fast notes) a new note could steal a releasing
+	// voice. Both are acceptable trade-offs for an 8-voice polyphonic synth.
+	// doneAction:2 in the SynthDef ensures the server node frees itself.
 	noteOff {
 		if(node.notNil) { node.set(\gate, 0) };
-		// node will free itself via doneAction: 2 when envelope completes
 		node = nil;
 	}
 

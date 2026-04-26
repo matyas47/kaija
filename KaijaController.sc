@@ -36,6 +36,7 @@ KaijaController {
 
 	// Synth params (shared across all voices)
 	var synthParams;
+	var synthParamsArgs;   // cached flat args array, rebuilt when synthParams changes
 
 	*new { |model, voices, scale, server|
 		^super.new.init(model, voices, scale, server)
@@ -73,7 +74,16 @@ KaijaController {
 			drive:        1.0,
 			vowelPos:     1.5
 		);
+		this.prRebuildSynthParamsArgs;
 		^this
+	}
+
+	// Rebuild the cached args representation of synthParams.
+	// Called when any synthParam changes — see set/loadPreset.
+	prRebuildSynthParamsArgs {
+		var arr = Array.new(synthParams.size * 2);
+		synthParams.keysValuesDo({ |k, v| arr.add(k); arr.add(v) });
+		synthParamsArgs = arr;
 	}
 
 	// ------------------------------------------------------------------
@@ -93,20 +103,13 @@ KaijaController {
 	}
 
 	notify { |key ...args|
-		listeners[key].do({ |f| f.valueArray(args) });
+		var fns = listeners[key];
+		if(fns.notNil) { fns.do({ |f| f.valueArray(args) }) };
 	}
 
 	// ------------------------------------------------------------------
 	// Spectral model parameters
 	// ------------------------------------------------------------------
-
-	setCarrier { |hz|
-		model.setCarrier(hz);
-		this.prPushPartialsToAll;
-		this.notify(\carrier,  model.carrier);
-		this.notify(\modHz,    model.modHz);
-		this.notify(\partials, model.absFreqs, model.amps);
-	}
 
 	setRatio { |r|
 		model.setRatio(r);
@@ -132,12 +135,10 @@ KaijaController {
 
 	refreshPartials {
 		this.prPushPartialsToAll;
-		this.notify(\carrier,  model.carrier);
-		this.notify(\ratio,    model.ratio);
-		this.notify(\index,    model.index);
-		this.notify(\tilt,     model.tilt);
-		this.notify(\modHz,    model.modHz);
-		this.notify(\partials, model.absFreqs, model.amps);
+		// Single batched notification — view re-reads everything in one defer
+		this.notify(\refresh,
+			model.carrier, model.ratio, model.index, model.tilt,
+			model.modHz, model.absFreqs, model.amps);
 	}
 
 	// ------------------------------------------------------------------
@@ -146,6 +147,7 @@ KaijaController {
 
 	set { |key, val|
 		synthParams[key] = val;
+		this.prRebuildSynthParamsArgs;
 		voices.do({ |v| v.set(key, val) });
 		this.notify(key, val);
 	}
@@ -194,8 +196,8 @@ KaijaController {
 	// Release all voices immediately and clear note tracking — use when notes get stuck
 	flushMIDI {
 		voices.do({ |v| v.freeSynth });
-		heldNotes      = Dictionary.new;
-		sustainedNotes = Set.new;
+		heldNotes.clear;
+		sustainedNotes.clear;
 		sustainPedal   = false;
 		this.notify(\voiceActivity, Array.fill(voices.size, { false }));
 	}
@@ -227,25 +229,42 @@ KaijaController {
 		snap = presetBank.load(name);
 		if(snap.isNil) { ("KaijaController: preset not found: " ++ name).warn; ^this };
 
-		if(snap[\ratio].notNil)   { this.setRatio(snap[\ratio]) };
-		if(snap[\index].notNil)   { this.setIndex(snap[\index]) };
-		if(snap[\tilt].notNil)    { this.setTilt(snap[\tilt]) };
+		// Set model parameters directly (no per-setter recompute/push)
+		if(snap[\ratio].notNil) { model.ratio = snap[\ratio].asFloat.clip(0.125, 8.0) };
+		if(snap[\index].notNil) { model.index = snap[\index].asFloat.clip(0.0, 10.0) };
+		if(snap[\tilt].notNil)  { model.tilt  = snap[\tilt].asFloat.clip(-1.0, 1.0) };
+		model.compute;
 
+		// Apply per-partial state
 		if(snap[\levels].notNil)  { this.setPartialParam(\levels,  snap[\levels]) };
 		if(snap[\phase].notNil)   { this.setPartialParam(\phase,   snap[\phase]) };
 		if(snap[\partAtk].notNil) { this.setPartialParam(\partAtk, snap[\partAtk]) };
 		if(snap[\partRel].notNil) { this.setPartialParam(\partRel, snap[\partRel]) };
 
+		// Apply synth params — update synthParams dict and push to voices,
+		// but defer the cache rebuild to the end.
 		synthParams.keys.do({ |k|
-			if(snap[k].notNil) { this.set(k, snap[k]) };
+			if(snap[k].notNil) {
+				synthParams[k] = snap[k];
+				voices.do({ |v| v.set(k, snap[k]) });
+				this.notify(k, snap[k]);
+			};
 		});
+		this.prRebuildSynthParamsArgs;
 
+		// Single refresh push — recomputes model, pushes partials, batches UI notify
+		this.refreshPartials;
 		this.notify(\presetLoaded, name);
 	}
 
 	deletePreset { |name|
 		presetBank.delete(name);
-		if(bankPath.notNil) { presetBank.writeToFile(bankPath) };
+		if(bankPath.notNil and: { presetBank.size > 0 }) {
+			presetBank.writeToFile(bankPath);
+		} {
+			// Bank emptied — clear path so next save starts fresh
+			if(presetBank.size == 0) { bankPath = nil };
+		};
 		this.notify(\presets, presetBank.names);
 	}
 
@@ -352,6 +371,10 @@ KaijaController {
 
 	play { |srv|
 		server = srv ?? { Server.default };
+		// Initialise voice level state from the model so the UI shows
+		// FM-derived amplitudes before the user touches anything.
+		// Real audio output uses these levels too once notes start.
+		voices.do({ |v| v.setPartialParam(\levels, model.amps) });
 		this.refreshPartials;
 	}
 
@@ -366,13 +389,13 @@ KaijaController {
 	// ------------------------------------------------------------------
 
 	prNoteOn { |note, velocity|
-		var freq, vIdx, voice;
+		var freq, vIdx, voice, args;
 
 		freq  = scale.freqAt(note);
 		vIdx  = this.prAllocVoice;
 		voice = voices[vIdx];
 
-		// If this note is already playing, release it first
+		// If this note is already playing, release its existing voice first
 		if(heldNotes[note].notNil) {
 			voices[heldNotes[note]].noteOff;
 		};
@@ -380,17 +403,20 @@ KaijaController {
 		heldNotes[note] = vIdx;
 		sustainedNotes.remove(note);
 
-		voice.noteOn(freq, velocity, synthParams[\master], server);
+		// Build args array combining per-note values, partial state, and
+		// cached synthParams. Bundled into one OSC message at Synth creation.
+		args = [
+			\root,      freq,
+			\velocity,  velocity.sqrt,
+			\gate,      1,
+			\ratios,    model.freqs,
+			\levels,    voice.getState(\levels),
+			\phase,     voice.getState(\phase),
+			\partAtk,   voice.getState(\partAtk),
+			\partRel,   voice.getState(\partRel)
+		] ++ synthParamsArgs;
 
-		// Push ratios always; push levels only if voice is fresh (all zero)
-		// so manual level adjustments survive note retriggers.
-		if(voice.node.notNil) {
-			voice.node.setn(\ratios, model.freqs);
-			if(voice.getState(\levels).every({ |l| l == 0.0 })) {
-				voice.setPartials(model.freqs, model.amps);
-			};
-		};
-		synthParams.keysValuesDo({ |k, v| voice.set(k, v) });
+		voice.noteOnWithArgs(args, server);
 
 		this.notify(\voiceActivity, this.prVoiceActivity);
 		this.notify(\noteOn, note, freq, velocity);
@@ -419,9 +445,11 @@ KaijaController {
 	prSustain { |state|
 		sustainPedal = state;
 		if(state.not) {
-			// Release all notes that had their note-off while pedal was held
+			// Release all notes that had their note-off while pedal was held.
+			// prReleaseNote only mutates heldNotes, not sustainedNotes,
+			// so iterating directly is safe.
 			sustainedNotes.do({ |note| this.prReleaseNote(note) });
-			sustainedNotes = Set.new;
+			sustainedNotes.clear;
 		};
 		this.notify(\sustain, sustainPedal);
 	}
@@ -439,13 +467,24 @@ KaijaController {
 		^voices.collect({ |v| v.node.notNil })
 	}
 
-	// Push current partials to all active voices
+	// Push current partials to all active voices.
+	// Pushes BOTH ratios and levels — the model's amps are derived for the
+	// current ratio/index/tilt, so changing those parameters means the
+	// previous levels are no longer meaningful. This is standard FM synth
+	// behavior: changing the spectrum resets levels to model output.
 	prPushPartialsToAll {
 		voices.do({ |v|
 			if(v.node.notNil) {
-				v.setPartials(model.freqs, model.amps);
+				v.setPartialParam(\ratios, model.freqs);
+				v.setPartialParam(\levels, model.amps);
 			};
 		});
+	}
+
+	// Push model amplitudes to all voice level state (active or not).
+	// Used at startup so the UI reflects the model from the beginning.
+	prPushModelLevelsToAll {
+		voices.do({ |v| v.setPartialParam(\levels, model.amps) });
 	}
 
 }
